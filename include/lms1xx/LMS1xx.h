@@ -26,6 +26,7 @@
 
 #include <string>
 #include <stdint.h>
+#include <vector>
 
 /*!
 * @class scanCfg
@@ -300,6 +301,7 @@ private:
 	bool debug;
 
 	int sockDesc;
+    std::vector<char> leftovers;
 };
 
 #endif /* LMS1XX_H_ */

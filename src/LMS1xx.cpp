@@ -29,6 +29,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
+#include <vector>
+#include <iostream>
 
 #include "lms1xx/LMS1xx.h"
 
@@ -204,167 +206,212 @@ void LMS1xx::scanContinous(int start) {
 	}
 }
 
+#define DATA_BUF_LEN 1200000
 void LMS1xx::getData(scanData& data) {
-	char buf[20000];
-	fd_set rfds;
-	struct timeval tv;
-	int retval, len;
-	len = 0;
+    char raw[DATA_BUF_LEN];
+    char buf[DATA_BUF_LEN];
+    int len=0;
+    if(leftovers.size() > 0) {
 
-	do {
-		FD_ZERO(&rfds);
-		FD_SET(sockDesc, &rfds);
+        for(int i = 0; i < leftovers.size(); i++) {
+            buf[len] = leftovers[i];
+            len++;
+        }
+        leftovers.clear();
+    }
+    unsigned long start;
 
-		tv.tv_sec = 0;
-		tv.tv_usec = 50000;
-		retval = select(sockDesc + 1, &rfds, NULL, NULL, &tv);
-		if (retval) {
-			len += read(sockDesc, buf + len, 20000 - len);
-		}
-	} while ((buf[0] != 0x02) || (buf[len - 1] != 0x03));
+    while(true) {
+        if(debug)
+            std::cout << "inside do while. ";
 
-	//	if (debug)
-	//		std::cout << "scan data recieved" << std::endl;
-	buf[len - 1] = 0;
-	char* tok = strtok(buf, " "); //Type of command
-	tok = strtok(NULL, " "); //Command
-	tok = strtok(NULL, " "); //VersionNumber
-	tok = strtok(NULL, " "); //DeviceNumber
-	tok = strtok(NULL, " "); //Serial number
-	tok = strtok(NULL, " "); //DeviceStatus
-	tok = strtok(NULL, " "); //MessageCounter
-	tok = strtok(NULL, " "); //ScanCounter
-	tok = strtok(NULL, " "); //PowerUpDuration
-	tok = strtok(NULL, " "); //TransmissionDuration
-	tok = strtok(NULL, " "); //InputStatus
-	tok = strtok(NULL, " "); //OutputStatus
-	tok = strtok(NULL, " "); //ReservedByteA
-	tok = strtok(NULL, " "); //ScanningFrequency
-	tok = strtok(NULL, " "); //MeasurementFrequency
-	tok = strtok(NULL, " ");
-	tok = strtok(NULL, " ");
-	tok = strtok(NULL, " ");
-	tok = strtok(NULL, " "); //NumberEncoders
-	int NumberEncoders;
-	sscanf(tok, "%d", &NumberEncoders);
-	for (int i = 0; i < NumberEncoders; i++) {
-		tok = strtok(NULL, " "); //EncoderPosition
-		tok = strtok(NULL, " "); //EncoderSpeed
-	}
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(sockDesc, &rfds);
 
-	tok = strtok(NULL, " "); //NumberChannels16Bit
-	int NumberChannels16Bit;
-	sscanf(tok, "%d", &NumberChannels16Bit);
-	if (debug)
-		printf("NumberChannels16Bit : %d\n", NumberChannels16Bit);
-	for (int i = 0; i < NumberChannels16Bit; i++) {
-		int type = -1; // 0 DIST1 1 DIST2 2 RSSI1 3 RSSI2
-		char content[6];
-		tok = strtok(NULL, " "); //MeasuredDataContent
-		sscanf(tok, "%s", content);
-		if (!strcmp(content, "DIST1")) {
-			type = 0;
-		} else if (!strcmp(content, "DIST2")) {
-			type = 1;
-		} else if (!strcmp(content, "RSSI1")) {
-			type = 2;
-		} else if (!strcmp(content, "RSSI2")) {
-			type = 3;
-		}
-		tok = strtok(NULL, " "); //ScalingFactor
-		tok = strtok(NULL, " "); //ScalingOffset
-		tok = strtok(NULL, " "); //Starting angle
-		tok = strtok(NULL, " "); //Angular step width
-		tok = strtok(NULL, " "); //NumberData
-		int NumberData;
-		sscanf(tok, "%X", &NumberData);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000;
 
-		if (debug)
-			printf("NumberData : %d\n", NumberData);
+        int retval = select(sockDesc + 1, &rfds, NULL, NULL, &tv); //always return the socket number
+        if(debug)
+            std::cout << "retval: " << retval << " ";
+        int curLen = 0;
+        if (retval) {
+            curLen = read(sockDesc, raw, DATA_BUF_LEN); // read till this is zero
 
-		if (type == 0) {
-			data.dist_len1 = NumberData;
-		} else if (type == 1) {
-			data.dist_len2 = NumberData;
-		} else if (type == 2) {
-			data.rssi_len1 = NumberData;
-		} else if (type == 3) {
-			data.rssi_len2 = NumberData;
-		}
+        }
 
-		for (int i = 0; i < NumberData; i++) {
-			int dat;
-			tok = strtok(NULL, " "); //data
-			sscanf(tok, "%X", &dat);
+        bool done = false;
+        for(int i = 0; i < curLen; i++) {
+            if(raw[i] == 0x03) { 
 
-			if (type == 0) {
-				data.dist1[i] = dat;
-			} else if (type == 1) {
-				data.dist2[i] = dat;
-			} else if (type == 2) {
-				data.rssi1[i] = dat;
-			} else if (type == 3) {
-				data.rssi2[i] = dat;
-			}
+                leftovers.assign(raw + i + 1, raw + curLen); // copy remaining to leftovers
+                done = true;  // this loop is important as it copies the remaining whereas in previous there were leftovers and its never the end so was stuck in the while loop
+                break;
+            } else { //  we copy till we dont find ETX
+                buf[len] = raw[i];
+                len++;
+            }
+        }
+        if(debug)
+            std::cout << std::endl;
+        if(done) {
+            break;
+        }
+    }
+    // from here the code is same as before
+    buf[len-1]=0;
+    char* tok = strtok(buf, " "); 
+    tok = strtok(NULL, " "); //Command
+    tok = strtok(NULL, " "); //VersionNumber
+    tok = strtok(NULL, " "); //DeviceNumber
+    tok = strtok(NULL, " "); //Serial number
+    tok = strtok(NULL, " "); //DeviceStatus
+    tok = strtok(NULL, " "); //MessageCounter
+    tok = strtok(NULL, " "); //ScanCounter
+    tok = strtok(NULL, " "); //PowerUpDuration
+    tok = strtok(NULL, " "); //TransmissionDuration
+    tok = strtok(NULL, " "); //InputStatus
+    tok = strtok(NULL, " "); //OutputStatus
+    tok = strtok(NULL, " "); //ReservedByteA
+    tok = strtok(NULL, " "); //ScanningFrequency
+    tok = strtok(NULL, " "); //MeasurementFrequency
+    tok = strtok(NULL, " ");
+    tok = strtok(NULL, " ");
+    tok = strtok(NULL, " ");
+    tok = strtok(NULL, " "); //NumberEncoders
+    int NumberEncoders;
+    sscanf(tok, "%d", &NumberEncoders);
+    //tok stop getting any data
+    for (int i = 0; i < NumberEncoders; i++) {
+        tok = strtok(NULL, " "); //EncoderPosition
+        tok = strtok(NULL, " "); //EncoderSpeed
+    }
 
-		}
-	}
+    tok = strtok(NULL, " "); //NumberChannels16Bit
+    int NumberChannels16Bit;
+    sscanf(tok, "%d", &NumberChannels16Bit);
+    if (debug)
+        printf("NumberChannels16Bit : %d\n", NumberChannels16Bit);
+    for (int i = 0; i < NumberChannels16Bit; i++) {
+        int type = -1; // 0 DIST1 1 DIST2 2 RSSI1 3 RSSI2
+        char content[6];
+        tok = strtok(NULL, " "); //MeasuredDataContent
+        sscanf(tok, "%s", content);
+        if (!strcmp(content, "DIST1")) {
+            type = 0;
+        } else if (!strcmp(content, "DIST2")) {
+            type = 1;
+        } else if (!strcmp(content, "RSSI1")) {
+            type = 2;
+        } else if (!strcmp(content, "RSSI2")) {
+            type = 3;
+        }
+        tok = strtok(NULL, " "); //ScalingFactor
+        tok = strtok(NULL, " "); //ScalingOffset
+        tok = strtok(NULL, " "); //Starting angle
+        tok = strtok(NULL, " "); //Angular step width
+        tok = strtok(NULL, " "); //NumberData
+        int NumberData;
+        sscanf(tok, "%X", &NumberData);
+        //std::cout<<"the type is"<<type;
+        if (debug)
+            printf("NumberData : %d\n", NumberData);
 
-	tok = strtok(NULL, " "); //NumberChannels8Bit
-	int NumberChannels8Bit;
-	sscanf(tok, "%d", &NumberChannels8Bit);
-	if (debug)
-		printf("NumberChannels8Bit : %d\n", NumberChannels8Bit);
-	for (int i = 0; i < NumberChannels8Bit; i++) {
-		int type = -1;
-		char content[6];
-		tok = strtok(NULL, " "); //MeasuredDataContent
-		sscanf(tok, "%s", content);
-		if (!strcmp(content, "DIST1")) {
-			type = 0;
-		} else if (!strcmp(content, "DIST2")) {
-			type = 1;
-		} else if (!strcmp(content, "RSSI1")) {
-			type = 2;
-		} else if (!strcmp(content, "RSSI2")) {
-			type = 3;
-		}
-		tok = strtok(NULL, " "); //ScalingFactor
-		tok = strtok(NULL, " "); //ScalingOffset
-		tok = strtok(NULL, " "); //Starting angle
-		tok = strtok(NULL, " "); //Angular step width
-		tok = strtok(NULL, " "); //NumberData
-		int NumberData;
-		sscanf(tok, "%X", &NumberData);
+        if (type == 0) {
 
-		if (debug)
-			printf("NumberData : %d\n", NumberData);
 
-		if (type == 0) {
-			data.dist_len1 = NumberData;
-		} else if (type == 1) {
-			data.dist_len2 = NumberData;
-		} else if (type == 2) {
-			data.rssi_len1 = NumberData;
-		} else if (type == 3) {
-			data.rssi_len2 = NumberData;
-		}
-		for (int i = 0; i < NumberData; i++) {
-			int dat;
-			tok = strtok(NULL, " "); //data
-			sscanf(tok, "%X", &dat);
 
-			if (type == 0) {
-				data.dist1[i] = dat;
-			} else if (type == 1) {
-				data.dist2[i] = dat;
-			} else if (type == 2) {
-				data.rssi1[i] = dat;
-			} else if (type == 3) {
-				data.rssi2[i] = dat;
-			}
-		}
-	}
+            data.dist_len1 = NumberData;
+
+        } else if (type == 1) {
+            data.dist_len2 = NumberData;
+        } else if (type == 2) {
+            data.rssi_len1 = NumberData;
+        } else if (type == 3) {
+            data.rssi_len2 = NumberData;
+        }
+
+        for (int i = 0; i < NumberData; i++) {
+            int dat;
+            tok = strtok(NULL, " "); //data
+            sscanf(tok, "%X", &dat);
+
+            if (type == 0) {
+
+                data.dist1[i] = dat;
+            } else if (type == 1) {
+                data.dist2[i] = dat;
+            } else if (type == 2) {
+                data.rssi1[i] = dat;
+            } else if (type == 3) {
+                data.rssi2[i] = dat;
+            }
+
+        }
+    }
+
+    tok = strtok(NULL, " "); //NumberChannels8Bit
+    int NumberChannels8Bit;
+    sscanf(tok, "%d", &NumberChannels8Bit);
+    if (debug)
+        printf("NumberChannels8Bit : %d\n", NumberChannels8Bit);
+    for (int i = 0; i < NumberChannels8Bit; i++) {
+        int type = -1;
+        char content[6];
+        tok = strtok(NULL, " "); //MeasuredDataContent
+        sscanf(tok, "%s", content);
+        if (!strcmp(content, "DIST1")) {
+            type = 0;
+        } else if (!strcmp(content, "DIST2")) {
+            type = 1;
+        } else if (!strcmp(content, "RSSI1")) {
+            type = 2;
+        } else if (!strcmp(content, "RSSI2")) {
+            type = 3;
+        }
+        // std::cout<<"Type for the second time is"<<type;
+        tok = strtok(NULL, " "); //ScalingFactor
+        tok = strtok(NULL, " "); //ScalingOffset
+        tok = strtok(NULL, " "); //Starting angle
+        tok = strtok(NULL, " "); //Angular step width
+        tok = strtok(NULL, " "); //NumberData
+        int NumberData;
+        sscanf(tok, "%X", &NumberData);
+
+//if (debug)
+        printf("NumberData : %d\n", NumberData);
+
+        if (type == 0) {
+
+            data.dist_len1 = NumberData;
+        } else if (type == 1) {
+            data.dist_len2 = NumberData;
+        } else if (type == 2) {
+
+
+            data.rssi_len1 = NumberData;
+
+        } else if (type == 3) {
+            data.rssi_len2 = NumberData;
+        }
+        for (int i = 0; i < NumberData; i++) {
+            int dat;
+            tok = strtok(NULL, " "); //data
+            sscanf(tok, "%X", &dat);
+
+            if (type == 0) {
+                data.dist1[i] = dat;
+            } else if (type == 1) {
+                data.dist2[i] = dat;
+            } else if (type == 2) {
+                data.rssi1[i] = dat;
+            } else if (type == 3) {
+                data.rssi2[i] = dat;
+            }
+        }
+    }
 
 }
 
